@@ -117,6 +117,7 @@ sealed interface UsernameValidationResult {
   data object TooShort : UsernameValidationResult
   data object TooLong : UsernameValidationResult
   data object InvalidCharacters : UsernameValidationResult
+  data object ReservedUsername : UsernameValidationResult
 }
 
 /**

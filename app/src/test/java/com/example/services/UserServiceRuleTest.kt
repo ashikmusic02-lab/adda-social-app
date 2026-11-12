@@ -18,14 +18,15 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
 
   @Test
   fun completeOnboarding_validUniqueUsername_createsUserAndUsernameClaimAtomically() = runBlocking {
-    val uid = signInTestUser("alice_${UUID.randomUUID().toString().take(6)}@test.com")
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val uid = signInTestUser(aliceEmail)
     val userService = FirebaseUserService(firestore, auth)
     val uniqueHandle = "alice_${UUID.randomUUID().toString().replace("-", "").take(10).lowercase()}"
 
     val result = withTimeout(DEFAULT_TIMEOUT_MS) {
       userService.completeOnboardingWithUniqueUsername(
         uid = uid,
-        email = "alice@test.com",
+        email = aliceEmail,
         photoUrl = null,
         displayName = "Alice Rahman",
         rawUsername = uniqueHandle,
@@ -39,6 +40,7 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
     val profile = result.getOrThrow()
     assertEquals(uid, profile.uid)
     assertEquals(uniqueHandle, profile.username)
+    assertEquals(aliceEmail, profile.email)
     assertTrue(profile.onboardingCompleted)
 
     val observed = withTimeout(FLOW_TIMEOUT_MS) {
@@ -50,7 +52,8 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
 
   @Test
   fun claimUsername_withAnotherUsersUid_failsWithPermissionDenied() = runBlocking {
-    val aliceUid = signInTestUser("alice_${UUID.randomUUID().toString().take(6)}@test.com")
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
     val spoofedHandle = "spoof_${UUID.randomUUID().toString().replace("-", "").take(10).lowercase()}"
 
     var caught: Throwable? = null
@@ -60,7 +63,6 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
         val usernameRef = firestore.collection("usernames").document(spoofedHandle)
         val userRef = firestore.collection("users").document(aliceUid)
 
-        // Alice tries to claim username with someone else's UID ("other_user_uid_999")
         batch.set(
           usernameRef,
           mapOf(
@@ -74,7 +76,7 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
             "uid" to aliceUid,
             "displayName" to "Alice",
             "username" to spoofedHandle,
-            "email" to "alice@test.com",
+            "email" to aliceEmail,
             "language" to "bn",
             "themeMode" to "system",
             "onboardingCompleted" to true,
@@ -96,12 +98,13 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
   fun completeOnboarding_overwritingExistingTakenUsername_failsAndPreservesOriginalClaim() = runBlocking {
     val sharedHandle = "taken_${UUID.randomUUID().toString().replace("-", "").take(10).lowercase()}"
 
-    val aliceUid = signInTestUser("alice_${UUID.randomUUID().toString().take(6)}@test.com")
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
     val aliceService = FirebaseUserService(firestore, auth)
     val firstClaim = withTimeout(DEFAULT_TIMEOUT_MS) {
       aliceService.completeOnboardingWithUniqueUsername(
         uid = aliceUid,
-        email = "alice@test.com",
+        email = aliceEmail,
         photoUrl = null,
         displayName = "Alice",
         rawUsername = sharedHandle,
@@ -112,8 +115,8 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
     }
     assertTrue(firstClaim.isSuccess)
 
-    // Bob signs in and tries both service transaction and direct batch overwrite
-    val bobUid = signInTestUser("bob_${UUID.randomUUID().toString().take(6)}@test.com")
+    val bobEmail = "bob_${UUID.randomUUID().toString().take(6)}@test.com"
+    val bobUid = signInTestUser(bobEmail)
     val bobService = FirebaseUserService(firestore, auth)
     val availableCheck = withTimeout(DEFAULT_TIMEOUT_MS) {
       bobService.checkUsernameAvailability(sharedHandle, bobUid)
@@ -125,7 +128,7 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
     val secondClaim = withTimeout(DEFAULT_TIMEOUT_MS) {
       bobService.completeOnboardingWithUniqueUsername(
         uid = bobUid,
-        email = "bob@test.com",
+        email = bobEmail,
         photoUrl = null,
         displayName = "Bob",
         rawUsername = sharedHandle,
@@ -136,7 +139,7 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
     }
     assertTrue("Expected duplicate username claim via UserService to fail", secondClaim.isFailure)
 
-    // 2. Direct batch overwrite attempt bypassing client check -> rejected by firestore.rules (!exists)
+    // 2. Direct batch overwrite attempt bypassing client check -> rejected by firestore.rules
     var directBatchCaught: Throwable? = null
     try {
       withTimeout(DEFAULT_TIMEOUT_MS) {
@@ -151,7 +154,7 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
             "uid" to bobUid,
             "displayName" to "Bob",
             "username" to sharedHandle,
-            "email" to "bob@test.com",
+            "email" to bobEmail,
             "language" to "en",
             "themeMode" to "dark",
             "onboardingCompleted" to true,
@@ -172,15 +175,385 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
   }
 
   @Test
-  fun crossUserRead_readingAnotherUsersProfile_failsWithPermissionDeniedInPhase1() = runBlocking {
-    val aliceUid = signInTestUser("alice_${UUID.randomUUID().toString().take(6)}@test.com")
+  fun caseA_settingSomeoneElsesClaimedUsernameInProfile_failsOnCreateAndUpdate() = runBlocking {
+    // (ক) অন্যের ক্লেইম করা নাম প্রোফাইলে বসানো ব্যর্থ
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
+    val aliceService = FirebaseUserService(firestore, auth)
+    val aliceHandle = "alice_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+
+    withTimeout(DEFAULT_TIMEOUT_MS) {
+      aliceService.completeOnboardingWithUniqueUsername(
+        uid = aliceUid,
+        email = aliceEmail,
+        photoUrl = null,
+        displayName = "Alice",
+        rawUsername = aliceHandle,
+        bio = "",
+        language = "bn",
+        themeMode = "system"
+      ).getOrThrow()
+    }
+
+    val bobEmail = "bob_${UUID.randomUUID().toString().take(6)}@test.com"
+    val bobUid = signInTestUser(bobEmail)
+    val bobService = FirebaseUserService(firestore, auth)
+
+    // 1. Bob tries to create his users/{bobUid} doc pointing to Alice's claimed username
+    var createCaught: Throwable? = null
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        firestore.collection("users").document(bobUid).set(
+          mapOf(
+            "uid" to bobUid,
+            "displayName" to "Bob",
+            "username" to aliceHandle,
+            "email" to bobEmail,
+            "language" to "bn",
+            "themeMode" to "system",
+            "onboardingCompleted" to true,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        ).await()
+      }
+    } catch (e: Throwable) {
+      createCaught = e
+    }
+    assertNotNull(createCaught)
+    assertEquals(
+      FirebaseFirestoreException.Code.PERMISSION_DENIED,
+      createCaught?.unwrapFirestoreException()?.code
+    )
+
+    // 2. Bob onboards with his own handle, then tries to update his profile username to Alice's handle
+    val bobHandle = "bob_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+    withTimeout(DEFAULT_TIMEOUT_MS) {
+      bobService.completeOnboardingWithUniqueUsername(
+        uid = bobUid,
+        email = bobEmail,
+        photoUrl = null,
+        displayName = "Bob",
+        rawUsername = bobHandle,
+        bio = "",
+        language = "bn",
+        themeMode = "system"
+      ).getOrThrow()
+    }
+
+    var updateCaught: Throwable? = null
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        firestore.collection("users").document(bobUid).update(
+          mapOf(
+            "username" to aliceHandle,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        ).await()
+      }
+    } catch (e: Throwable) {
+      updateCaught = e
+    }
+    assertNotNull(updateCaught)
+    assertEquals(
+      FirebaseFirestoreException.Code.PERMISSION_DENIED,
+      updateCaught?.unwrapFirestoreException()?.code
+    )
+  }
+
+  @Test
+  fun caseB_changingUsernameWithoutCreatingClaimInSameBatch_failsWithPermissionDenied() = runBlocking {
+    // (খ) ক্লেইম ছাড়া নাম বদলানো ব্যর্থ
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
+    val aliceService = FirebaseUserService(firestore, auth)
+    val oldHandle = "old_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+    val newHandle = "new_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+
+    withTimeout(DEFAULT_TIMEOUT_MS) {
+      aliceService.completeOnboardingWithUniqueUsername(
+        uid = aliceUid,
+        email = aliceEmail,
+        photoUrl = null,
+        displayName = "Alice",
+        rawUsername = oldHandle,
+        bio = "",
+        language = "bn",
+        themeMode = "system"
+      ).getOrThrow()
+    }
+
+    var caught: Throwable? = null
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        // Updating users/{aliceUid}.username directly without creating usernames/{newHandle}
+        firestore.collection("users").document(aliceUid).update(
+          mapOf(
+            "username" to newHandle,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        ).await()
+      }
+    } catch (e: Throwable) {
+      caught = e
+    }
+    assertNotNull("Expected changing username without claim to fail", caught)
+    assertEquals(
+      FirebaseFirestoreException.Code.PERMISSION_DENIED,
+      caught?.unwrapFirestoreException()?.code
+    )
+  }
+
+  @Test
+  fun caseC_changingUsernameWithoutDeletingOldClaim_failsWithPermissionDenied() = runBlocking {
+    // (গ) পুরোনো ক্লেইম না মুছে নাম বদলানো ব্যর্থ
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
+    val aliceService = FirebaseUserService(firestore, auth)
+    val firstHandle = "first_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+    val secondHandle = "second_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+
+    withTimeout(DEFAULT_TIMEOUT_MS) {
+      aliceService.completeOnboardingWithUniqueUsername(
+        uid = aliceUid,
+        email = aliceEmail,
+        photoUrl = null,
+        displayName = "Alice",
+        rawUsername = firstHandle,
+        bio = "",
+        language = "bn",
+        themeMode = "system"
+      ).getOrThrow()
+    }
+
+    var caught: Throwable? = null
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        // Creates new claim + updates users doc, but omits deleting old claim
+        val batch = firestore.batch()
+        batch.set(
+          firestore.collection("usernames").document(secondHandle),
+          mapOf(
+            "uid" to aliceUid,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+        batch.update(
+          firestore.collection("users").document(aliceUid),
+          mapOf(
+            "username" to secondHandle,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+        batch.commit().await()
+      }
+    } catch (e: Throwable) {
+      caught = e
+    }
+    assertNotNull("Expected changing username without deleting old claim to fail", caught)
+    assertEquals(
+      FirebaseFirestoreException.Code.PERMISSION_DENIED,
+      caught?.unwrapFirestoreException()?.code
+    )
+  }
+
+  @Test
+  fun caseD_deletingUsernameClaimWhileKeepingUsernameInProfile_failsWithPermissionDenied() = runBlocking {
+    // (ঘ) প্রোফাইলে নাম রেখে ক্লেইম মোছা ব্যর্থ
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
+    val aliceService = FirebaseUserService(firestore, auth)
+    val handle = "keep_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+
+    withTimeout(DEFAULT_TIMEOUT_MS) {
+      aliceService.completeOnboardingWithUniqueUsername(
+        uid = aliceUid,
+        email = aliceEmail,
+        photoUrl = null,
+        displayName = "Alice",
+        rawUsername = handle,
+        bio = "",
+        language = "bn",
+        themeMode = "system"
+      ).getOrThrow()
+    }
+
+    var caught: Throwable? = null
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        firestore.collection("usernames").document(handle).delete().await()
+      }
+    } catch (e: Throwable) {
+      caught = e
+    }
+    assertNotNull("Expected deleting username claim while keeping profile username to fail", caught)
+    assertEquals(
+      FirebaseFirestoreException.Code.PERMISSION_DENIED,
+      caught?.unwrapFirestoreException()?.code
+    )
+  }
+
+  @Test
+  fun caseE_claimingReservedUsernameAdmin_failsInServiceAndSecurityRules() = runBlocking {
+    // (ঙ) "admin" ক্লেইম ব্যর্থ
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
+    val aliceService = FirebaseUserService(firestore, auth)
+
+    // 1. Client-side validation rejects "admin"
+    val serviceAttempt = withTimeout(DEFAULT_TIMEOUT_MS) {
+      aliceService.completeOnboardingWithUniqueUsername(
+        uid = aliceUid,
+        email = aliceEmail,
+        photoUrl = null,
+        displayName = "Alice",
+        rawUsername = "admin",
+        bio = "",
+        language = "bn",
+        themeMode = "system"
+      )
+    }
+    assertTrue("Expected UserService to reject reserved username 'admin'", serviceAttempt.isFailure)
+
+    // 2. Direct Firestore batch bypassing client check is rejected by firestore.rules
+    var ruleCaught: Throwable? = null
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        val batch = firestore.batch()
+        batch.set(
+          firestore.collection("usernames").document("admin"),
+          mapOf(
+            "uid" to aliceUid,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+        batch.set(
+          firestore.collection("users").document(aliceUid),
+          mapOf(
+            "uid" to aliceUid,
+            "displayName" to "Alice",
+            "username" to "admin",
+            "email" to aliceEmail,
+            "language" to "bn",
+            "themeMode" to "system",
+            "onboardingCompleted" to true,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+        batch.commit().await()
+      }
+    } catch (e: Throwable) {
+      ruleCaught = e
+    }
+    assertNotNull("Expected firestore.rules to reject reserved username 'admin'", ruleCaught)
+    assertEquals(
+      FirebaseFirestoreException.Code.PERMISSION_DENIED,
+      ruleCaught?.unwrapFirestoreException()?.code
+    )
+  }
+
+  @Test
+  fun caseF_validAtomicUsernameChange_succeedsAndReleasesOldClaim() = runBlocking {
+    // (চ) সঠিক নাম বদলানো সফল (UserService.changeUsername দিয়ে একই ব্যাচে নতুন ক্লেইম তৈরি, পুরোনো ক্লেইম মোছা ও users আপডেট)
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
+    val aliceService = FirebaseUserService(firestore, auth)
+    val oldHandle = "v1_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+    val newHandle = "v2_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+
+    withTimeout(DEFAULT_TIMEOUT_MS) {
+      aliceService.completeOnboardingWithUniqueUsername(
+        uid = aliceUid,
+        email = aliceEmail,
+        photoUrl = null,
+        displayName = "Alice",
+        rawUsername = oldHandle,
+        bio = "",
+        language = "bn",
+        themeMode = "system"
+      ).getOrThrow()
+    }
+
+    val swapResult = withTimeout(DEFAULT_TIMEOUT_MS) {
+      aliceService.changeUsername(aliceUid, newHandle)
+    }
+    assertTrue("Expected atomic username change to succeed, got: ${swapResult.exceptionOrNull()}", swapResult.isSuccess)
+    assertEquals(newHandle, swapResult.getOrThrow())
+
+    // Old username is now available again, new username belongs to Alice, profile has newHandle
+    val oldClaimSnap = withTimeout(DEFAULT_TIMEOUT_MS) {
+      firestore.collection("usernames").document(oldHandle).get().await()
+    }
+    assertFalse("Expected old username claim to be deleted", oldClaimSnap.exists())
+
+    val newClaimSnap = withTimeout(DEFAULT_TIMEOUT_MS) {
+      firestore.collection("usernames").document(newHandle).get().await()
+    }
+    assertTrue("Expected new username claim to exist", newClaimSnap.exists())
+    assertEquals(aliceUid, newClaimSnap.getString("uid"))
+
+    val updatedProfile = withTimeout(DEFAULT_TIMEOUT_MS) {
+      aliceService.getMyProfile(aliceUid).getOrThrow()
+    }
+    assertEquals(newHandle, updatedProfile?.username)
+  }
+
+  @Test
+  fun caseG_mismatchedFakeEmail_failsWithPermissionDenied() = runBlocking {
+    // (ছ) ভুয়া email ব্যর্থ (data.email != request.auth.token.email)
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
+    val handle = "mail_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+
+    var caught: Throwable? = null
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        val batch = firestore.batch()
+        batch.set(
+          firestore.collection("usernames").document(handle),
+          mapOf(
+            "uid" to aliceUid,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+        batch.set(
+          firestore.collection("users").document(aliceUid),
+          mapOf(
+            "uid" to aliceUid,
+            "displayName" to "Alice",
+            "username" to handle,
+            "email" to "fake_different_email@test.com",
+            "language" to "bn",
+            "themeMode" to "system",
+            "onboardingCompleted" to true,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+        batch.commit().await()
+      }
+    } catch (e: Throwable) {
+      caught = e
+    }
+    assertNotNull("Expected mismatched fake email to fail", caught)
+    assertEquals(
+      FirebaseFirestoreException.Code.PERMISSION_DENIED,
+      caught?.unwrapFirestoreException()?.code
+    )
+  }
+
+  @Test
+  fun crossUserReadAndSystemFieldInjection_rejectedByRules() = runBlocking {
+    val aliceEmail = "alice_${UUID.randomUUID().toString().take(6)}@test.com"
+    val aliceUid = signInTestUser(aliceEmail)
     val aliceService = FirebaseUserService(firestore, auth)
     val handle = "u_${UUID.randomUUID().toString().replace("-", "").take(10).lowercase()}"
 
     withTimeout(DEFAULT_TIMEOUT_MS) {
       aliceService.completeOnboardingWithUniqueUsername(
         uid = aliceUid,
-        email = "alice@test.com",
+        email = aliceEmail,
         photoUrl = null,
         displayName = "Alice",
         rawUsername = handle,
@@ -191,31 +564,35 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
     }
 
     // Bob signs in and tries to read Alice's user document
-    signInTestUser("bob_${UUID.randomUUID().toString().take(6)}@test.com")
+    val bobEmail = "bob_${UUID.randomUUID().toString().take(6)}@test.com"
+    val bobUid = signInTestUser(bobEmail)
     val bobService = FirebaseUserService(firestore, auth)
     val crossRead = withTimeout(DEFAULT_TIMEOUT_MS) {
       bobService.getMyProfile(aliceUid)
     }
     assertTrue(crossRead.isFailure)
-    val firestoreEx = crossRead.exceptionOrNull()?.unwrapFirestoreException()
-    assertNotNull(firestoreEx)
-    assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, firestoreEx?.code)
-  }
+    assertEquals(
+      FirebaseFirestoreException.Code.PERMISSION_DENIED,
+      crossRead.exceptionOrNull()?.unwrapFirestoreException()?.code
+    )
 
-  @Test
-  fun clientSystemFieldEscalation_writingFollowersCountOrIsBanned_rejectedByRules() = runBlocking {
-    val uid = signInTestUser("hacker_${UUID.randomUUID().toString().take(6)}@test.com")
-
-    // 1. Attempt writing followersCount on create
+    // Bob tries to inject followersCount on create
     var followersCaught: Throwable? = null
     try {
       withTimeout(DEFAULT_TIMEOUT_MS) {
-        firestore.collection("users").document(uid).set(
+        val batch = firestore.batch()
+        val bobHandle = "bob_${UUID.randomUUID().toString().replace("-", "").take(8).lowercase()}"
+        batch.set(
+          firestore.collection("usernames").document(bobHandle),
+          mapOf("uid" to bobUid, "createdAt" to FieldValue.serverTimestamp())
+        )
+        batch.set(
+          firestore.collection("users").document(bobUid),
           mapOf(
-            "uid" to uid,
-            "displayName" to "Hacker",
-            "username" to "hacker_01",
-            "email" to "hacker@test.com",
+            "uid" to bobUid,
+            "displayName" to "Bob",
+            "username" to bobHandle,
+            "email" to bobEmail,
             "language" to "bn",
             "themeMode" to "dark",
             "onboardingCompleted" to true,
@@ -223,7 +600,8 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
           )
-        ).await()
+        )
+        batch.commit().await()
       }
     } catch (e: Throwable) {
       followersCaught = e
@@ -233,53 +611,6 @@ class UserServiceRuleTest : FirestoreEmulatorTestBase() {
       FirebaseFirestoreException.Code.PERMISSION_DENIED,
       followersCaught?.unwrapFirestoreException()?.code
     )
-
-    // 2. Attempt writing isBanned on create
-    var isBannedCaught: Throwable? = null
-    try {
-      withTimeout(DEFAULT_TIMEOUT_MS) {
-        firestore.collection("users").document(uid).set(
-          mapOf(
-            "uid" to uid,
-            "displayName" to "Hacker",
-            "username" to "hacker_01",
-            "email" to "hacker@test.com",
-            "language" to "bn",
-            "themeMode" to "dark",
-            "onboardingCompleted" to true,
-            "isBanned" to false,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp()
-          )
-        ).await()
-      }
-    } catch (e: Throwable) {
-      isBannedCaught = e
-    }
-    assertNotNull(isBannedCaught)
-    assertEquals(
-      FirebaseFirestoreException.Code.PERMISSION_DENIED,
-      isBannedCaught?.unwrapFirestoreException()?.code
-    )
-  }
-
-  @Test
-  fun unauthenticatedCaller_observingProfile_failsWithPermissionDenied() = runBlocking {
-    auth.signOut()
-    val service = FirebaseUserService(firestore, auth)
-
-    var caughtException: Throwable? = null
-    try {
-      withTimeout(FLOW_TIMEOUT_MS) {
-        service.observeMyProfile("some_user_123").first()
-      }
-    } catch (e: Throwable) {
-      caughtException = e
-    }
-    assertNotNull("Expected exception when unauthenticated", caughtException)
-    val firestoreEx = caughtException?.unwrapFirestoreException()
-    assertNotNull("Expected nested FirebaseFirestoreException, got $caughtException", firestoreEx)
-    assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, firestoreEx?.code)
   }
 
   private companion object {

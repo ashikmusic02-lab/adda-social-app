@@ -50,6 +50,7 @@ data class AppStrings(
   val usernameInvalidCharsMsg: String,
   val usernameTooShortMsg: String,
   val usernameTooLongMsg: String,
+  val usernameReservedMsg: String,
   val completeOnboardingBtn: String,
   val savingProfile: String,
   // Navigation Tabs
@@ -140,6 +141,7 @@ val BengaliStrings = AppStrings(
   usernameInvalidCharsMsg = "শুধুমাত্র ছোট হাতের অক্ষর (a-z), সংখ্যা (0-9) ও আন্ডারস্কোর (_) অনুমোদিত।",
   usernameTooShortMsg = "ইউজারনেম কমপক্ষে ৩ অক্ষরের হতে হবে।",
   usernameTooLongMsg = "ইউজারনেম সর্বোচ্চ ২৪ অক্ষরের হতে পারবে।",
+  usernameReservedMsg = "এই ইউজারনেমটি সিস্টেমের জন্য সংরক্ষিত। অন্য নাম বেছে নিন।",
   completeOnboardingBtn = "প্রোফাইল সংরক্ষণ ও শুরু করুন",
   savingProfile = "সংরক্ষণ হচ্ছে...",
   navHome = "হোম",
@@ -227,6 +229,7 @@ val EnglishStrings = AppStrings(
   usernameInvalidCharsMsg = "Only lowercase letters (a-z), numbers (0-9), and underscores (_) are allowed.",
   usernameTooShortMsg = "Username must be at least 3 characters long.",
   usernameTooLongMsg = "Username cannot exceed 24 characters.",
+  usernameReservedMsg = "This username is reserved by the system. Please choose another.",
   completeOnboardingBtn = "Save Profile & Continue",
   savingProfile = "Saving...",
   navHome = "Home",

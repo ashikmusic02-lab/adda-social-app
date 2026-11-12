@@ -22,7 +22,7 @@ import kotlinx.coroutines.tasks.await
 
 /**
  * UserService interface — manages `/users/{userId}` and `/usernames/{username}`
- * with atomic Firestore transactions for unique username claims.
+ * with atomic Firestore transactions/batches for unique username claims and swaps.
  */
 interface UserService {
   fun validateUsernameFormat(rawUsername: String): UsernameValidationResult
@@ -39,6 +39,7 @@ interface UserService {
     language: String,
     themeMode: String
   ): Result<UserProfile>
+  suspend fun changeUsername(uid: String, rawNewUsername: String): Result<String>
   suspend fun updatePreferences(uid: String, language: String, themeMode: String): Result<Unit>
   suspend fun updateProfile(
     uid: String,
@@ -76,6 +77,7 @@ class FirebaseUserService(
     if (normalized.length < 3) return UsernameValidationResult.TooShort
     if (normalized.length > 24) return UsernameValidationResult.TooLong
     if (!usernameRegex.matches(normalized)) return UsernameValidationResult.InvalidCharacters
+    if (normalized in RESERVED_USERNAMES) return UsernameValidationResult.ReservedUsername
     return UsernameValidationResult.Valid
   }
 
@@ -156,8 +158,8 @@ class FirebaseUserService(
   }
 
   /**
-   * Atomically claims `usernames/{username}` and creates/updates `users/{uid}` inside a
-   * Firestore transaction (`db.runTransaction`).
+   * Phase 1 Onboarding: Atomically claims `usernames/{username}` and creates/updates `users/{uid}`
+   * inside a single Firestore transaction (`db.runTransaction`).
    */
   override suspend fun completeOnboardingWithUniqueUsername(
     uid: String,
@@ -177,6 +179,7 @@ class FirebaseUserService(
 
     val cleanDisplayName = displayName.trim()
     val normalizedUsername = rawUsername.trim()
+    val verifiedEmail = email.trim().ifEmpty { auth.currentUser?.email?.trim().orEmpty() }
 
     if (cleanDisplayName.isEmpty() || cleanDisplayName.length > 60) {
       return Result.failure(IllegalArgumentException("Display name must be 1–60 characters."))
@@ -208,7 +211,7 @@ class FirebaseUserService(
           transaction.set(usernameDocRef, claimPayload)
         }
 
-        // If the user previously claimed a different username, release the old one
+        // If the user previously claimed a different username, release the old one in the same batch
         val previousUsername = if (userSnap.exists()) userSnap.getString("username") else null
         if (!previousUsername.isNullOrBlank() && previousUsername != normalizedUsername) {
           val oldUsernameRef = db.collection("usernames").document(previousUsername)
@@ -220,7 +223,7 @@ class FirebaseUserService(
             uid = verifiedUid,
             displayName = cleanDisplayName,
             username = normalizedUsername,
-            email = email.trim(),
+            email = verifiedEmail,
             photoUrl = photoUrl,
             bio = bio.trim().ifBlank { null },
             language = language,
@@ -253,7 +256,7 @@ class FirebaseUserService(
         uid = verifiedUid,
         displayName = cleanDisplayName,
         username = normalizedUsername,
-        email = email,
+        email = verifiedEmail,
         photoUrl = photoUrl,
         bio = bio.trim().ifBlank { null },
         language = language,
@@ -265,6 +268,81 @@ class FirebaseUserService(
       throw e
     } catch (e: Exception) {
       handleFirestoreError(e, OperationType.WRITE, userDocRef.path)
+      Result.failure(e)
+    }
+  }
+
+  /**
+   * Atomically changes a user's username in a single transaction/batch:
+   * 1. Creates new claim `usernames/{newUsername}` owned by `uid`
+   * 2. Deletes old claim `usernames/{oldUsername}`
+   * 3. Updates `users/{uid}.username` to `newUsername`
+   */
+  override suspend fun changeUsername(uid: String, rawNewUsername: String): Result<String> {
+    val verifiedUid = try {
+      requireAuthenticatedUid(uid)
+    } catch (e: Exception) {
+      return Result.failure(e)
+    }
+
+    val normalizedNewUsername = rawNewUsername.trim()
+    val validation = validateUsernameFormat(normalizedNewUsername)
+    if (validation != UsernameValidationResult.Valid) {
+      return Result.failure(IllegalArgumentException("Username format invalid: $validation"))
+    }
+
+    val userDocRef = db.collection("users").document(verifiedUid)
+    val newUsernameDocRef = db.collection("usernames").document(normalizedNewUsername)
+
+    return try {
+      db.runTransaction { transaction ->
+        val userSnap = transaction.get(userDocRef)
+        if (!userSnap.exists()) {
+          throw IllegalStateException("User profile does not exist for uid=$verifiedUid")
+        }
+
+        val currentUsername = userSnap.getString("username")
+          ?: throw IllegalStateException("Current profile has no username.")
+
+        if (currentUsername == normalizedNewUsername) {
+          return@runTransaction normalizedNewUsername
+        }
+
+        val newUsernameSnap = transaction.get(newUsernameDocRef)
+        if (newUsernameSnap.exists()) {
+          throw UsernameAlreadyTakenException(normalizedNewUsername)
+        }
+
+        val oldUsernameDocRef = db.collection("usernames").document(currentUsername)
+
+        // All 3 operations happen atomically in the same transaction commit:
+        // (1) Create new username claim
+        transaction.set(
+          newUsernameDocRef,
+          mapOf(
+            "uid" to verifiedUid,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+        // (2) Delete old username claim
+        transaction.delete(oldUsernameDocRef)
+        // (3) Update users/{uid} with new username
+        transaction.update(
+          userDocRef,
+          mapOf(
+            "username" to normalizedNewUsername,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        normalizedNewUsername
+      }.await()
+
+      Result.success(normalizedNewUsername)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, userDocRef.path)
       Result.failure(e)
     }
   }
@@ -333,5 +411,23 @@ class FirebaseUserService(
       handleFirestoreError(e, OperationType.UPDATE, docRef.path)
       Result.failure(e)
     }
+  }
+
+  companion object {
+    val RESERVED_USERNAMES = setOf(
+      "admin",
+      "administrator",
+      "support",
+      "moderator",
+      "mod",
+      "adda",
+      "official",
+      "staff",
+      "help",
+      "system",
+      "root",
+      "null",
+      "undefined"
+    )
   }
 }

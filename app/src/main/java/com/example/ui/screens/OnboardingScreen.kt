@@ -266,6 +266,7 @@ fun OnboardingScreen(
                   UsernameValidationResult.TooShort -> strings.usernameTooShortMsg
                   UsernameValidationResult.TooLong -> strings.usernameTooLongMsg
                   UsernameValidationResult.InvalidCharacters -> strings.usernameInvalidCharsMsg
+                  UsernameValidationResult.ReservedUsername -> strings.usernameReservedMsg
                   UsernameValidationResult.Valid -> ""
                 }
                 Text(
