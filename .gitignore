@@ -15,6 +15,14 @@
 .cxx
 local.properties
 .env
+*-debug.log
+
+# সিকিউরিটি নিয়ম: Release keystore কখনোই রিপোতে কমিট বা পুশ করা যাবে না।
+# Release keystores must NEVER be committed to the repository.
 *.jks
 release.keystore
-*-debug.log
+*release*.keystore
+
+# এই debug.keystore.base64 শুধুমাত্র debug বিল্ডের জন্য (যাতে GitHub Actions-এ প্রতিবার একই SHA-1 থাকে)।
+# এটি release বিল্ডে কখনো ব্যবহার হবে না।
+!debug.keystore.base64

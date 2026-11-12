@@ -25,6 +25,8 @@ android {
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
   // and updating Android apps in AI Studio.
+  // নোট: debug.keystore (debug.keystore.base64 থেকে ডিকোড করা) শুধুমাত্র debug বিল্ডের জন্য।
+  // এটি release বিল্ডে কখনো ব্যবহার হবে না।
   signingConfigs {
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
