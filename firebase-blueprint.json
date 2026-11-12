@@ -1,0 +1,101 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user's profile and preferences for Phase 1. Counter and moderation fields (followersCount, followingCount, postsCount, isVerified, isBanned) are read-only from client. Admin roles are handled via Firebase Auth Custom Claims, not a Firestore role field.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Immutable Firebase Auth UID matching document ID."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User's full display name (1 to 60 characters)."
+        },
+        "username": {
+          "type": "string",
+          "description": "Unique lowercase handle matching ^[a-z0-9_]{3,24}$."
+        },
+        "email": {
+          "type": "string",
+          "description": "User's email address from Auth provider (up to 120 chars)."
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Optional profile avatar URL (up to 500 chars)."
+        },
+        "bio": {
+          "type": "string",
+          "description": "Optional short biography (up to 160 chars)."
+        },
+        "language": {
+          "type": "string",
+          "enum": ["bn", "en"],
+          "description": "Preferred UI language code ('bn' for Bengali, 'en' for English)."
+        },
+        "themeMode": {
+          "type": "string",
+          "enum": ["system", "light", "dark"],
+          "description": "Preferred UI theme mode."
+        },
+        "onboardingCompleted": {
+          "type": "boolean",
+          "description": "Whether the user has completed initial name & unique username onboarding."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when profile was created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when profile was last updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "username",
+        "email",
+        "language",
+        "themeMode",
+        "onboardingCompleted",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UsernameClaim": {
+      "title": "UsernameClaim",
+      "description": "Unique username reservation document in /usernames/{username} written atomically in the same batch/transaction as /users/{userId} (verified via getAfter).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "UID of the user who claimed this username (must equal request.auth.uid)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the username was claimed (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": ["uid", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Phase 1 user profiles. Strictly owner-only read and write in Phase 1."
+    },
+    "/usernames/{username}": {
+      "schema": {
+        "$ref": "#/entities/UsernameClaim"
+      },
+      "description": "Global unique username registry. Requires atomic batch/transaction with /users/{uid}. Immutable once claimed."
+    }
+  }
+}

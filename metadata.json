@@ -1,0 +1,6 @@
+{
+  "name": "Adda",
+  "description": "Bengali & English social networking app — Phase 1: Auth, Onboarding, Unique Usernames & Navigation",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
