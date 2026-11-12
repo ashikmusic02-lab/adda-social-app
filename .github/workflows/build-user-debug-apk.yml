@@ -26,7 +26,7 @@ jobs:
       # release বিল্ডে এটি কখনোই ব্যবহার করা হবে না।
       - name: Verify Static Repo debug.keystore
         run: |
-          EXPECTED_SHA1="13:EE:07:37:10:AE:FC:86:1A:59:F7:51:69:56:C6:64:A7:D9:62:6E"
+          EXPECTED_SHA1="B1:AB:99:5A:3D:A6:30:5F:5F:F7:94:49:A4:1B:9C:CB:D3:1E:5D:06"
 
           if [ ! -f debug.keystore.base64 ]; then
             echo "::error::debug.keystore.base64 রিপোতে নেই"
