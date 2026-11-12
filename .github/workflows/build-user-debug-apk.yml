@@ -1,7 +1,7 @@
 name: Build Native Android Debug APK (Phase 1)
 
-# সতর্কতা: এই ওয়ার্কফ্লো এবং debug.keystore.base64 শুধুমাত্র debug বিল্ডের জন্য।
-# এটি release বিল্ডে কখনো ব্যবহার হবে না। Release keystore সবসময় GitHub Secrets-এ থাকবে।
+# সতর্কতা: এই ওয়ার্কফ্লো এবং debug.keystore.base64 শুধুমাত্র debug বিল্ডের জন্য।
+# এটি release বিল্ডে কখনো ব্যবহার হবে না। Release keystore সবসময় GitHub Secrets-এ থাকবে।
 
 on:
   workflow_dispatch:
@@ -22,8 +22,6 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # নোট: এই স্থির debug.keystore.base64 শুধুমাত্র debug বিল্ডের জন্য।
-      # release বিল্ডে এটি কখনোই ব্যবহার করা হবে না।
       - name: Verify Static Repo debug.keystore
         run: |
           EXPECTED_SHA1="B1:AB:99:5A:3D:A6:30:5F:5F:F7:94:49:A4:1B:9C:CB:D3:1E:5D:06"
@@ -33,7 +31,6 @@ jobs:
             exit 1
           fi
 
-          # base64 -d দিয়ে debug.keystore তৈরি (শুধুমাত্র debug বিল্ডের জন্য, release বিল্ডে কখনো ব্যবহার হবে না)
           base64 -d debug.keystore.base64 > debug.keystore
 
           echo "=================================================================="
@@ -45,10 +42,10 @@ jobs:
 
           ACTUAL_SHA1=$(echo "$KEYTOOL_OUT" | grep -E "SHA1:|SHA-1:" | head -n 1 | awk '{print $2}')
           if [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
-            echo "::error::debug.keystore SHA-1 মেলেনি! প্রত্যাশিত: $EXPECTED_SHA1, পাওয়া গেছে: $ACTUAL_SHA1"
+            echo "::error::debug.keystore SHA-1 মেলেনি! প্রত্যাশিত: $EXPECTED_SHA1, পাওয়া গেছে: $ACTUAL_SHA1"
             exit 1
           fi
-          echo "SHA-1 সফলভাবে যাচাই হয়েছে: $ACTUAL_SHA1"
+          echo "SHA-1 সফলভাবে যাচাই হয়েছে: $ACTUAL_SHA1"
 
       - name: Decode google-services.json from GitHub Secret
         env:
@@ -60,10 +57,13 @@ jobs:
           fi
           echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
 
-      - name: Assemble Native Android Debug APK (:app:assembleDebug)
+      - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
-          arguments: :app:assembleDebug
+          gradle-version: '9.3.1'
+
+      - name: Assemble Native Android Debug APK (:app:assembleDebug)
+        run: gradle :app:assembleDebug --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
